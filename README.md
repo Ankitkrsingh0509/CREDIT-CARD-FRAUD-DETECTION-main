@@ -109,10 +109,10 @@ This makes the project stronger for both presentation and viva.
 
 ## How to Run
 1. Download the Kaggle credit card fraud dataset and place `creditcard.csv` in the project root.
-2. Install the required libraries:
+2. Install the project dependencies:
 
 ```bash
-pip install pandas numpy matplotlib seaborn scikit-learn imbalanced-learn jupyter
+pip install -r /Users/ankitkumarsingh/Desktop/CREDIT-CARD-FRAUD-DETECTION-main/requirements.txt
 ```
 
 3. Open the notebook:
@@ -122,15 +122,9 @@ jupyter notebook /Users/ankitkumarsingh/Desktop/CREDIT-CARD-FRAUD-DETECTION-main
 ```
 
 ## Run in Streamlit
-This project now also includes a Streamlit dashboard for interactive demonstration.
+This project also includes a Streamlit dashboard for interactive demonstration.
 
-1. Install the dependencies:
-
-```bash
-pip install -r /Users/ankitkumarsingh/Desktop/CREDIT-CARD-FRAUD-DETECTION-main/requirements.txt
-```
-
-2. Start the app:
+Start the app with:
 
 ```bash
 streamlit run /Users/ankitkumarsingh/Desktop/CREDIT-CARD-FRAUD-DETECTION-main/app.py

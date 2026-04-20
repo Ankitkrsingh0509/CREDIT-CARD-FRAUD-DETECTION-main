@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -28,12 +29,10 @@ from sklearn.model_selection import (
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
-
 RANDOM_STATE = 42
 BASE_DIR = Path(__file__).resolve().parent
 
 sns.set_theme(style="whitegrid")
-
 
 TRAINING_PROFILES = {
     "Quick demo": {
@@ -56,7 +55,6 @@ TRAINING_PROFILES = {
     },
 }
 
-
 def find_dataset_path() -> Path | None:
     candidates = [
         BASE_DIR / "creditcard.csv",
@@ -69,11 +67,9 @@ def find_dataset_path() -> Path | None:
             return path
     return None
 
-
 @st.cache_data(show_spinner=False)
 def load_dataset(path_str: str) -> pd.DataFrame:
     return pd.read_csv(path_str)
-
 
 def take_stratified_sample(
     df: pd.DataFrame, sample_size: int | None, random_state: int = RANDOM_STATE
@@ -89,80 +85,37 @@ def take_stratified_sample(
     )
     return df.loc[sampled_index].copy().reset_index(drop=True)
 
-
 def build_pipelines(smote_strategy: float) -> dict[str, ImbPipeline]:
     return {
         "Logistic Regression": ImbPipeline(
             [
                 ("scaler", StandardScaler()),
                 ("pca", PCA(n_components=0.95, random_state=RANDOM_STATE)),
-                (
-                    "smote",
-                    SMOTE(
-                        random_state=RANDOM_STATE,
-                        sampling_strategy=smote_strategy,
-                    ),
-                ),
-                (
-                    "model",
-                    LogisticRegression(max_iter=3000, random_state=RANDOM_STATE),
-                ),
+                ("smote", SMOTE(random_state=RANDOM_STATE, sampling_strategy=smote_strategy)),
+                ("model", LogisticRegression(max_iter=3000, random_state=RANDOM_STATE)),
             ]
         ),
         "Random Forest": ImbPipeline(
             [
-                (
-                    "smote",
-                    SMOTE(
-                        random_state=RANDOM_STATE,
-                        sampling_strategy=smote_strategy,
-                    ),
-                ),
-                (
-                    "model",
-                    RandomForestClassifier(
-                        n_estimators=220,
-                        random_state=RANDOM_STATE,
-                        n_jobs=-1,
-                        class_weight="balanced_subsample",
-                    ),
-                ),
+                ("smote", SMOTE(random_state=RANDOM_STATE, sampling_strategy=smote_strategy)),
+                ("model", RandomForestClassifier(n_estimators=100, random_state=RANDOM_STATE, n_jobs=-1, class_weight="balanced_subsample")),
             ]
         ),
         "Gradient Boosting": ImbPipeline(
             [
-                (
-                    "smote",
-                    SMOTE(
-                        random_state=RANDOM_STATE,
-                        sampling_strategy=smote_strategy,
-                    ),
-                ),
-                (
-                    "model",
-                    GradientBoostingClassifier(
-                        n_estimators=100,
-                        random_state=RANDOM_STATE,
-                    ),
-                ),
+                ("smote", SMOTE(random_state=RANDOM_STATE, sampling_strategy=smote_strategy)),
+                ("model", GradientBoostingClassifier(n_estimators=50, random_state=RANDOM_STATE)),
             ]
         ),
         "Support Vector Machine": ImbPipeline(
             [
                 ("scaler", StandardScaler()),
                 ("pca", PCA(n_components=0.95, random_state=RANDOM_STATE)),
-                (
-                    "smote",
-                    SMOTE(
-                        random_state=RANDOM_STATE,
-                        sampling_strategy=smote_strategy,
-                    ),
-                ),
+                ("smote", SMOTE(random_state=RANDOM_STATE, sampling_strategy=smote_strategy)),
                 ("model", LinearSVC(random_state=RANDOM_STATE, max_iter=5000)),
             ]
         ),
     }
-
 
 def get_model_scores(pipeline: ImbPipeline, features: pd.DataFrame) -> np.ndarray:
     if hasattr(pipeline, "predict_proba"):
@@ -171,6 +124,35 @@ def get_model_scores(pipeline: ImbPipeline, features: pd.DataFrame) -> np.ndarra
         return pipeline.decision_function(features)
     raise AttributeError("The selected model does not expose scores for ROC-AUC.")
 
+
+def get_risk_score_details(pipeline: ImbPipeline, features: pd.DataFrame) -> tuple[float, str]:
+    if hasattr(pipeline, "predict_proba"):
+        probability = float(pipeline.predict_proba(features)[0, 1])
+        return probability, "Fraud probability"
+    if hasattr(pipeline, "decision_function"):
+        decision_score = float(np.ravel(pipeline.decision_function(features))[0])
+        normalized_score = 1.0 / (1.0 + np.exp(-np.clip(decision_score, -500, 500)))
+        return normalized_score, "Normalized decision score (not a calibrated probability)"
+    raise AttributeError("The selected model does not expose a usable prediction score.")
+
+
+def get_feature_importance_df(
+    pipeline: ImbPipeline, feature_names: pd.Index
+) -> pd.DataFrame | None:
+    model = pipeline.named_steps["model"]
+    if not hasattr(model, "feature_importances_"):
+        return None
+
+    importances = np.asarray(model.feature_importances_)
+    if len(importances) != len(feature_names):
+        return None
+
+    return pd.DataFrame(
+        {
+            "Feature": feature_names,
+            "Importance": importances,
+        }
+    ).sort_values(by="Importance", ascending=False)
 
 def evaluate_model(
     model_name: str,
@@ -193,7 +175,6 @@ def evaluate_model(
         "ROC-AUC": roc_auc_score(y_test, scores),
     }
     return metrics, predictions, scores
-
 
 @st.cache_resource(show_spinner=False)
 def run_experiment(
@@ -230,14 +211,7 @@ def run_experiment(
 
     cv_rows = []
     for model_name, pipeline in pipelines.items():
-        scores = cross_validate(
-            pipeline,
-            x_train,
-            y_train,
-            cv=cv,
-            scoring=scoring,
-            n_jobs=-1,
-        )
+        scores = cross_validate(pipeline, x_train, y_train, cv=cv, scoring=scoring, n_jobs=-1)
         cv_rows.append(
             {
                 "Model": model_name,
@@ -252,9 +226,8 @@ def run_experiment(
     tuning_summary = None
     if tune_random_forest:
         param_grid = {
-            "model__n_estimators": [220, 320],
-            "model__max_depth": [None, 16, 24],
-            "model__min_samples_leaf": [1, 2],
+            "model__n_estimators": [100, 200],
+            "model__max_depth": [None, 16],
             "model__min_samples_split": [2, 5],
         }
         search = GridSearchCV(
@@ -275,33 +248,24 @@ def run_experiment(
     model_outputs = {}
     for model_name, pipeline in pipelines.items():
         metrics, predictions, scores = evaluate_model(
-            model_name,
-            pipeline,
-            x_train,
-            x_test,
-            y_train,
-            y_test,
+            model_name, pipeline, x_train, x_test, y_train, y_test
         )
+        feature_importance_df = get_feature_importance_df(pipeline, x_train.columns)
         comparison_rows.append(metrics)
         model_outputs[model_name] = {
             "pipeline": pipeline,
             "predictions": predictions,
             "scores": scores,
             "confusion_matrix": confusion_matrix(y_test, predictions),
+            "feature_importance_df": feature_importance_df.reset_index(drop=True)
+            if feature_importance_df is not None
+            else None,
         }
 
-    comparison_df = pd.DataFrame(comparison_rows).sort_values(
-        by=["Recall", "ROC-AUC"], ascending=False
-    )
+    comparison_df = pd.DataFrame(comparison_rows).sort_values(by=["Recall", "ROC-AUC"], ascending=False)
     cv_df = pd.DataFrame(cv_rows).sort_values(by="CV Recall", ascending=False)
 
-    rf_model = model_outputs["Random Forest"]["pipeline"].named_steps["model"]
-    feature_importance_df = pd.DataFrame(
-        {
-            "Feature": x_train.columns,
-            "Importance": rf_model.feature_importances_,
-        }
-    ).sort_values(by="Importance", ascending=False)
+    feature_importance_df = model_outputs["Random Forest"]["feature_importance_df"]
 
     test_samples = x_test.copy()
     test_samples["Actual Class"] = y_test.values
@@ -325,55 +289,35 @@ def run_experiment(
         },
     }
 
-
 def plot_class_distribution(df: pd.DataFrame) -> plt.Figure:
     fig, axes = plt.subplots(1, 2, figsize=(13, 4))
     class_percent = df["Class"].value_counts(normalize=True).sort_index() * 100
-
     sns.countplot(x="Class", data=df, ax=axes[0], palette="Set2")
     axes[0].set_title("Class Distribution")
-    axes[0].set_xlabel("Class")
-    axes[0].set_ylabel("Count")
-
     class_percent.plot(kind="bar", ax=axes[1], color=["#4C72B0", "#DD8452"])
     axes[1].set_title("Class Percentage")
-    axes[1].set_xlabel("Class")
-    axes[1].set_ylabel("Percentage (%)")
     axes[1].tick_params(axis="x", rotation=0)
-
     fig.tight_layout()
     return fig
-
 
 def plot_confusion_matrices(results: dict) -> plt.Figure:
     num_models = len(results["model_outputs"])
-    fig, axes = plt.subplots(1, num_models, figsize=(6 * num_models, 5))
+    fig, axes = plt.subplots(1, num_models, figsize=(5 * num_models, 4))
     for axis, (model_name, output) in zip(axes, results["model_outputs"].items()):
-        sns.heatmap(
-            output["confusion_matrix"],
-            annot=True,
-            fmt="d",
-            cmap="Blues",
-            cbar=False,
-            ax=axis,
-        )
+        sns.heatmap(output["confusion_matrix"], annot=True, fmt="d", cmap="Blues", cbar=False, ax=axis)
         axis.set_title(f"{model_name}")
         axis.set_xlabel("Predicted")
         axis.set_ylabel("Actual")
-
     fig.tight_layout()
     return fig
-
 
 def plot_roc_curves(results: dict) -> plt.Figure:
     fig, axis = plt.subplots(figsize=(8, 6))
     y_test = results["y_test"]
-
     for model_name, output in results["model_outputs"].items():
         fpr, tpr, _ = roc_curve(y_test, output["scores"])
         auc_score = roc_auc_score(y_test, output["scores"])
         axis.plot(fpr, tpr, linewidth=2, label=f"{model_name} (AUC = {auc_score:.4f})")
-
     axis.plot([0, 1], [0, 1], linestyle="--", color="black", label="Random Guess")
     axis.set_title("ROC Curve Comparison")
     axis.set_xlabel("False Positive Rate")
@@ -382,217 +326,326 @@ def plot_roc_curves(results: dict) -> plt.Figure:
     fig.tight_layout()
     return fig
 
-
-def plot_feature_importance(feature_importance_df: pd.DataFrame) -> plt.Figure:
-    top_features = feature_importance_df.head(10)
-    fig, axis = plt.subplots(figsize=(9, 5))
-    sns.barplot(data=top_features, x="Importance", y="Feature", palette="viridis", ax=axis)
-    axis.set_title("Top 10 Feature Importances - Random Forest")
-    axis.set_xlabel("Importance")
-    axis.set_ylabel("Feature")
+def plot_local_explanation(
+    feature_row: pd.DataFrame,
+    test_samples: pd.DataFrame,
+    feature_importances: pd.DataFrame,
+    model_name: str,
+) -> plt.Figure:
+    top_features = feature_importances.head(5)["Feature"].tolist()
+    
+    # Calculate means for fraud and non-fraud
+    legit_means = test_samples[test_samples["Actual Class"] == 0][top_features].mean()
+    fraud_means = test_samples[test_samples["Actual Class"] == 1][top_features].mean()
+    transaction_vals = feature_row[top_features].iloc[0]
+    
+    fig, ax = plt.subplots(figsize=(10, 5))
+    x = np.arange(len(top_features))
+    width = 0.25
+    
+    ax.bar(x - width, legit_means, width, label='Avg Legitimate', color='#4C72B0', alpha=0.8)
+    ax.bar(x, fraud_means, width, label='Avg Fraud', color='#DD8452', alpha=0.8)
+    ax.bar(x + width, transaction_vals, width, label='This Transaction', color='#55A868', edgecolor='black', linewidth=1.5)
+    
+    ax.set_title(f"{model_name}: Top 5 Influential Features")
+    ax.set_xticks(x)
+    ax.set_xticklabels(top_features)
+    ax.legend()
     fig.tight_layout()
     return fig
 
 
-def render_prediction_lab(results: dict) -> None:
-    st.subheader("Transaction Prediction Demo")
-    st.write(
-        "Choose a transaction from the test set and score it with the trained Random Forest model."
-    )
-
-    test_samples = results["test_samples"]
-    sample_index = st.slider(
-        "Select a test transaction",
-        min_value=0,
-        max_value=len(test_samples) - 1,
-        value=0,
-    )
-
-    selected_row = test_samples.iloc[sample_index]
-    actual_class = int(selected_row["Actual Class"])
-    feature_row = selected_row.drop(labels=["Actual Class"]).to_frame().T
-
-    st.dataframe(feature_row, use_container_width=True)
-
-    if st.button("Predict Fraud Risk", use_container_width=True):
-        rf_pipeline = results["model_outputs"]["Random Forest"]["pipeline"]
-        prediction = int(rf_pipeline.predict(feature_row)[0])
-        probability = float(rf_pipeline.predict_proba(feature_row)[0, 1])
-
-        left, right = st.columns(2)
-        left.metric("Predicted Class", "Fraud" if prediction == 1 else "Legitimate")
-        right.metric("Fraud Probability", f"{probability:.2%}")
-
-        st.caption(f"Actual class for this test example: {'Fraud' if actual_class == 1 else 'Legitimate'}")
-
-        if prediction == 1:
-            st.error("The model flagged this transaction as potentially fraudulent.")
-        else:
-            st.success("The model classified this transaction as legitimate.")
-
-
-def main() -> None:
-    st.set_page_config(
-        page_title="Credit Card Fraud Detection",
-        page_icon="💳",
-        layout="wide",
-    )
-
-    st.title("💳 Credit Card Fraud Detection Dashboard")
-    st.write(
-        "This Streamlit app converts the fraud detection notebook into an interactive demo with "
-        "dataset analysis, model comparison, evaluation metrics, and a live prediction screen."
-    )
-
-    dataset_path = find_dataset_path()
-    if dataset_path is None:
-        st.error(
-            "Dataset not found. Add `creditcard.csv` or `creditcard .csv` to the project folder and rerun the app."
-        )
-        st.stop()
-
-    dataset = load_dataset(str(dataset_path))
-
-    st.sidebar.header("Run Settings")
-    st.sidebar.caption(f"Dataset: `{dataset_path.name}`")
-
-    training_profile = st.sidebar.selectbox(
-        "Training profile",
-        list(TRAINING_PROFILES.keys()),
-        index=2,
-    )
-    profile_config = TRAINING_PROFILES[training_profile]
-    st.sidebar.caption(profile_config["description"])
-
-    smote_strategy = st.sidebar.slider(
-        "SMOTE sampling strategy",
-        min_value=0.10,
-        max_value=1.00,
-        value=0.25,
-        step=0.05,
-        help="0.25 means minority samples are generated until they reach 25% of the majority class.",
-    )
-    cv_folds = st.sidebar.slider(
-        "Cross-validation folds",
-        min_value=3,
-        max_value=5,
-        value=profile_config["cv_folds"],
-    )
-    tune_random_forest = st.sidebar.checkbox(
-        "Tune Random Forest with GridSearchCV",
-        value=profile_config["tune_random_forest"],
-    )
-
-    sample_size = profile_config["sample_size"]
-    rows_label = f"{sample_size:,}" if sample_size is not None else "All rows"
-    st.sidebar.write(f"Rows used for training: **{rows_label}**")
-
-    st.subheader("Project Overview")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Transactions", f"{len(dataset):,}")
-    col2.metric("Fraud Cases", f"{int(dataset['Class'].sum()):,}")
-    col3.metric("Fraud Rate", f"{dataset['Class'].mean() * 100:.3f}%")
-
-    st.info(
-        "Recall matters most in fraud detection because false negatives mean real fraud transactions were missed."
-    )
-    st.pyplot(plot_class_distribution(dataset))
-
-    if st.button("Train Models and Build Dashboard", type="primary", use_container_width=True):
-        with st.spinner("Training models, applying SMOTE, and computing evaluation metrics..."):
-            results = run_experiment(
-                str(dataset_path),
-                sample_size,
-                smote_strategy,
-                cv_folds,
-                tune_random_forest,
-            )
-        st.session_state["results"] = results
-        st.session_state["settings"] = {
-            "training_profile": training_profile,
-            "smote_strategy": smote_strategy,
-            "cv_folds": cv_folds,
-            "tune_random_forest": tune_random_forest,
-        }
-
+# Streamlit Pages
+def page_model_training():
+    st.header("⚙️ Model Training & Global Performance")
     results = st.session_state.get("results")
-    if results is None:
-        st.warning("Click the training button to generate model results and enable the prediction demo.")
+    if not results:
+        st.warning("Please run the training pipeline from the sidebar first.")
         return
-
-    st.subheader("Run Summary")
-    st.write(
-        f"Profile: **{st.session_state['settings']['training_profile']}** | "
-        f"SMOTE strategy: **{st.session_state['settings']['smote_strategy']:.2f}** | "
-        f"CV folds: **{st.session_state['settings']['cv_folds']}** | "
-        f"Random Forest tuning: **{'On' if st.session_state['settings']['tune_random_forest'] else 'Off'}**"
-    )
-
-    summary = results["dataset_summary"]
-    sum_col1, sum_col2, sum_col3, sum_col4 = st.columns(4)
-    sum_col1.metric("Rows Used", f"{summary['rows_used']:,}")
-    sum_col2.metric("Train Rows", f"{summary['train_rows']:,}")
-    sum_col3.metric("Test Rows", f"{summary['test_rows']:,}")
-    sum_col4.metric("Fraud Cases Used", f"{summary['fraud_cases_used']:,}")
-
-    if results["tuning_summary"] is not None:
-        st.success(
-            f"Best tuned Random Forest recall: {results['tuning_summary']['best_cv_recall']:.4f}"
-        )
-        st.json(results["tuning_summary"]["best_params"])
-
-    best_row = results["comparison_df"].iloc[0]
-    metric1, metric2, metric3 = st.columns(3)
-    metric1.metric("Best Model", str(best_row["Model"]))
-    metric2.metric("Best Recall", f"{best_row['Recall']:.4f}")
-    metric3.metric("Best ROC-AUC", f"{best_row['ROC-AUC']:.4f}")
-
-    st.info(
-        "For final submission, use the `Proper training` profile so the dashboard trains on the full dataset with 5-fold cross-validation and tuned Random Forest."
-    )
 
     st.subheader("Model Comparison Table")
     st.dataframe(
         results["comparison_df"].style.format(
-            {
-                "Accuracy": "{:.4f}",
-                "Precision": "{:.4f}",
-                "Recall": "{:.4f}",
-                "F1-score": "{:.4f}",
-                "ROC-AUC": "{:.4f}",
-            }
+            {"Accuracy": "{:.4f}", "Precision": "{:.4f}", "Recall": "{:.4f}", "F1-score": "{:.4f}", "ROC-AUC": "{:.4f}"}
         ),
         use_container_width=True,
     )
 
-    st.subheader("Cross-Validation Summary")
-    st.dataframe(
-        results["cv_df"].style.format(
-            {
-                "CV Accuracy": "{:.4f}",
-                "CV Precision": "{:.4f}",
-                "CV Recall": "{:.4f}",
-                "CV F1": "{:.4f}",
-                "CV ROC-AUC": "{:.4f}",
-            }
-        ),
-        use_container_width=True,
-    )
+    st.subheader("Confusion Matrices")
+    st.pyplot(plot_confusion_matrices(results))
 
-    chart_col1, chart_col2 = st.columns(2)
-    with chart_col1:
-        st.subheader("Confusion Matrices")
-        st.pyplot(plot_confusion_matrices(results))
-    with chart_col2:
-        st.subheader("ROC Curve")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("ROC Curves")
         st.pyplot(plot_roc_curves(results))
+    with col2:
+        st.subheader("Global Feature Importance (Random Forest)")
+        top_features = results["feature_importance_df"].head(10)
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.barplot(data=top_features, x="Importance", y="Feature", palette="viridis", ax=ax)
+        st.pyplot(fig)
 
-    st.subheader("Random Forest Feature Importance")
-    st.dataframe(results["feature_importance_df"].head(10), use_container_width=True)
-    st.pyplot(plot_feature_importance(results["feature_importance_df"]))
 
-    render_prediction_lab(results)
+def page_manual_testing():
+    st.header("🧪 Manual Testing Lab & Explainability")
+    results = st.session_state.get("results")
+    if not results:
+        st.warning("Please run the training pipeline first.")
+        return
 
+    st.write("Test individual transactions and compare how different models evaluate them.")
+
+    test_samples = results["test_samples"]
+    
+    col_input1, col_input2 = st.columns([1, 2])
+    with col_input1:
+        st.subheader("Input Data")
+        input_method = st.radio("Choose Input Method", ["Select from Test Set", "Custom Input / Random"])
+        
+        if input_method == "Select from Test Set":
+            sample_index = st.slider("Select a test transaction ID", 0, len(test_samples) - 1, 0)
+            selected_row = test_samples.iloc[sample_index].copy()
+            actual_class = int(selected_row["Actual Class"])
+            feature_row = selected_row.drop(labels=["Actual Class"]).to_frame().T
+            st.info(f"Actual Class: **{'Fraud' if actual_class == 1 else 'Legitimate'}**")
+        else:
+            profile_type = st.selectbox("Load template profile", ["Legitimate Template", "Fraud Template"])
+            if st.button("Generate Template Values"):
+                # Grab a random row matching the profile
+                target_cls = 0 if profile_type == "Legitimate Template" else 1
+                template_row = test_samples[test_samples["Actual Class"] == target_cls].sample(1).iloc[0]
+                st.session_state["custom_v_features"] = template_row.drop(["Time", "Amount", "Actual Class"]).to_dict()
+            
+            amt = st.number_input("Transaction Amount ($)", min_value=0.0, value=150.0)
+            time_val = st.number_input("Time (seconds since start)", min_value=0.0, value=10000.0)
+            
+            # Use generated V features or default to 0
+            v_features = st.session_state.get("custom_v_features", {f"V{i}": 0.0 for i in range(1, 29)})
+            
+            feature_dict = {"Time": time_val}
+            feature_dict.update(v_features)
+            feature_dict["Amount"] = amt
+            
+            feature_row = pd.DataFrame([feature_dict])
+            # Reorder columns to match training
+            feature_row = feature_row[test_samples.drop(columns=["Actual Class"]).columns]
+            st.info("Using template V1-V28 features + your custom Amount/Time.")
+
+    with col_input2:
+        st.subheader("Model Prediction")
+        selected_model = st.selectbox("Compare with Model", list(results["model_outputs"].keys()))
+        selected_output = results["model_outputs"][selected_model]
+        pipeline = selected_output["pipeline"]
+        
+        # Make prediction
+        prediction = int(pipeline.predict(feature_row)[0])
+        risk_score_value, risk_score_label = get_risk_score_details(pipeline, feature_row)
+
+        st.metric("Model Verdict", "🚨 FRAUD DETECTED" if prediction == 1 else "✅ LEGITIMATE")
+        st.metric("Suspicion / Risk Score", f"{risk_score_value:.2%}")
+        st.progress(risk_score_value)
+        st.caption(risk_score_label)
+
+        feature_importance_df = selected_output["feature_importance_df"]
+        if feature_importance_df is None:
+            st.subheader("Explanation Availability")
+            st.info(
+                "This chart is available only for tree-based models in the current app. "
+                "Logistic Regression and SVM use PCA-transformed features, so their scores "
+                "cannot be mapped back to the original columns with this simple explanation view."
+            )
+        else:
+            st.subheader("Feature Importance Explanation")
+            st.write(
+                "Visual breakdown of how this model's top 5 influential features compare "
+                "against typical legitimate and fraud transactions."
+            )
+            fig_explain = plot_local_explanation(
+                feature_row, test_samples, feature_importance_df, selected_model
+            )
+            st.pyplot(fig_explain)
+
+
+def page_admin_dashboard():
+    st.header("🔄 Live Admin Dashboard & Simulation")
+    results = st.session_state.get("results")
+    if not results:
+        st.warning("Please run the training pipeline first.")
+        return
+
+    st.write("Simulate real-time incoming transactions and monitor system metrics.")
+    
+    # Initialize simulation state
+    if "sim_log" not in st.session_state:
+        st.session_state["sim_log"] = []
+    if "sim_log_model" not in st.session_state:
+        st.session_state["sim_log_model"] = None
+    
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        selected_model = st.selectbox("Active Monitoring Model", list(results["model_outputs"].keys()))
+        if st.session_state["sim_log_model"] not in (None, selected_model):
+            st.session_state["sim_log"] = []
+            st.session_state["sim_log_model"] = selected_model
+            st.info("Simulation history was cleared because the active model changed.")
+        sim_speed = st.slider("Simulation Speed (sec/tx)", 0.1, 2.0, 0.5)
+        num_sim = st.number_input("Transactions to simulate", 10, 500, 50)
+        
+        if st.button("🚀 Start Live Simulation", use_container_width=True):
+            test_samples = results["test_samples"]
+            pipeline = results["model_outputs"][selected_model]["pipeline"]
+            st.session_state["sim_log_model"] = selected_model
+            score_metric_label = (
+                "Avg Fraud Probability"
+                if hasattr(pipeline, "predict_proba")
+                else "Avg Normalized Decision Score"
+            )
+            threshold_label = (
+                "Fraud Threshold"
+                if hasattr(pipeline, "predict_proba")
+                else "Decision Threshold"
+            )
+            chart_ylabel = (
+                "Fraud Probability"
+                if hasattr(pipeline, "predict_proba")
+                else "Normalized Decision Score"
+            )
+            
+            metric_placeholder = st.empty()
+            chart_placeholder = st.empty()
+            
+            # Simulate
+            for i in range(num_sim):
+                # Pick a random sample
+                row = test_samples.sample(1).iloc[0]
+                feature_row = row.drop("Actual Class").to_frame().T
+                
+                prediction = int(pipeline.predict(feature_row)[0])
+                risk_score_value, risk_score_label = get_risk_score_details(pipeline, feature_row)
+                
+                log_entry = {
+                    "Tx_ID": len(st.session_state["sim_log"]) + 1,
+                    "Amount": row["Amount"],
+                    "Risk_Score": risk_score_value,
+                    "Risk_Score_Label": risk_score_label,
+                    "Flagged": prediction == 1,
+                    "Actual_Fraud": row["Actual Class"] == 1,
+                }
+                st.session_state["sim_log"].append(log_entry)
+                
+                # Update UI inside the loop
+                log_df = pd.DataFrame(st.session_state["sim_log"])
+                total_tx = len(log_df)
+                total_flagged = log_df["Flagged"].sum()
+                fraud_percent = (total_flagged / total_tx) * 100
+                
+                with metric_placeholder.container():
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Total Checked", total_tx)
+                    m2.metric("Flagged Fraud", total_flagged)
+                    m3.metric("Flag Rate", f"{fraud_percent:.1f}%")
+                    m4.metric(score_metric_label, f"{log_df['Risk_Score'].mean():.2f}")
+                
+                with chart_placeholder.container():
+                    fig, ax = plt.subplots(figsize=(10, 4))
+                    ax.plot(log_df["Tx_ID"].tail(50), log_df["Risk_Score"].tail(50), color='orange', marker='o', markersize=4)
+                    ax.axhline(y=0.5, color='r', linestyle='--', label=threshold_label)
+                    ax.set_ylim(0, 1)
+                    ax.set_title("Live Risk Score Trend (Last 50 Transactions)")
+                    ax.set_ylabel(chart_ylabel)
+                    ax.set_xlabel("Transaction ID")
+                    ax.legend()
+                    st.pyplot(fig)
+                
+                time.sleep(sim_speed)
+                
+        if st.button("Clear History", use_container_width=True):
+            st.session_state["sim_log"] = []
+            st.session_state["sim_log_model"] = selected_model
+            st.rerun()
+
+    with col2:
+        st.subheader("System Metrics")
+        if len(st.session_state["sim_log"]) > 0:
+            log_df = pd.DataFrame(st.session_state["sim_log"])
+            
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Checked", len(log_df))
+            m2.metric("Flagged Fraud", log_df["Flagged"].sum())
+            m3.metric("Flag Rate", f"{(log_df['Flagged'].sum() / len(log_df)) * 100:.1f}%")
+            latest_score_label = log_df["Risk_Score_Label"].iloc[-1]
+            avg_score_label = (
+                "Avg Fraud Probability"
+                if latest_score_label == "Fraud probability"
+                else "Avg Normalized Decision Score"
+            )
+            threshold_label = (
+                "Fraud Threshold"
+                if latest_score_label == "Fraud probability"
+                else "Decision Threshold"
+            )
+            chart_ylabel = (
+                "Fraud Probability"
+                if latest_score_label == "Fraud probability"
+                else "Normalized Decision Score"
+            )
+            m4.metric(avg_score_label, f"{log_df['Risk_Score'].mean():.2f}")
+            
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.plot(log_df["Tx_ID"], log_df["Risk_Score"], color='orange', alpha=0.7)
+            ax.axhline(y=0.5, color='r', linestyle='--', label=threshold_label)
+            ax.set_ylim(0, 1)
+            ax.set_title("Overall Risk Score Trend")
+            ax.set_ylabel(chart_ylabel)
+            ax.legend()
+            st.pyplot(fig)
+            
+            st.dataframe(log_df.tail(10).iloc[::-1], use_container_width=True)
+        else:
+            st.info("No data yet. Click 'Start Live Simulation' to begin.")
+
+
+def main() -> None:
+    st.set_page_config(page_title="Credit Card Intelligence", page_icon="💳", layout="wide")
+    
+    st.sidebar.title("💳 Navigation")
+    page = st.sidebar.radio("Go to", ["⚙️ Model Training", "🧪 Manual Testing Lab", "🔄 Admin Dashboard"])
+
+    dataset_path = find_dataset_path()
+    if dataset_path is None:
+        st.error("Dataset not found. Add `creditcard.csv` to the project folder and rerun.")
+        st.stop()
+
+    st.sidebar.divider()
+    st.sidebar.header("Data & Training Setup")
+    dataset = load_dataset(str(dataset_path))
+    
+    training_profile = st.sidebar.selectbox("Training profile", list(TRAINING_PROFILES.keys()), index=1)
+    profile_config = TRAINING_PROFILES[training_profile]
+    smote_strategy = st.sidebar.slider("SMOTE sampling strategy", 0.10, 1.00, 0.25, 0.05)
+    
+    if st.sidebar.button("Train Models", type="primary", use_container_width=True):
+        with st.spinner("Training models, applying SMOTE, and computing metrics..."):
+            results = run_experiment(
+                str(dataset_path),
+                profile_config["sample_size"],
+                smote_strategy,
+                profile_config["cv_folds"],
+                profile_config["tune_random_forest"],
+            )
+            st.session_state["results"] = results
+            st.success("Training Complete!")
+
+    if page == "⚙️ Model Training":
+        st.title("Credit Card Fraud Models")
+        st.write("Analyze dataset imbalance and train multiple machine learning models.")
+        st.pyplot(plot_class_distribution(dataset))
+        page_model_training()
+    elif page == "🧪 Manual Testing Lab":
+        page_manual_testing()
+    elif page == "🔄 Admin Dashboard":
+        page_admin_dashboard()
 
 if __name__ == "__main__":
     main()
