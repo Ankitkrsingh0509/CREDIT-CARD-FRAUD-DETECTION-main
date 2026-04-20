@@ -621,10 +621,12 @@ def main() -> None:
     st.sidebar.header("Data & Training Setup")
     
     if dataset_path is None:
-        st.sidebar.warning("Dataset not found on server.")
-        uploaded_file = st.sidebar.file_uploader("Upload creditcard.csv", type=["csv", "zip"])
+        st.sidebar.warning("Dataset not found. Add `creditcard.csv` or `creditcard.csv.zip` to the app folder, or upload it below.")
+        uploaded_file = st.sidebar.file_uploader(
+            "Upload creditcard.csv or creditcard.csv.zip", type=["csv", "zip"]
+        )
         if uploaded_file is None:
-            st.info("Please upload the dataset in the sidebar to continue.")
+            st.info("Please upload `creditcard.csv` or `creditcard.csv.zip` in the sidebar to continue.")
             st.stop()
         dataset = load_dataset(uploaded_file)
     else:
