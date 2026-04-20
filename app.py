@@ -58,8 +58,12 @@ TRAINING_PROFILES = {
 def find_dataset_path() -> Path | None:
     candidates = [
         BASE_DIR / "creditcard.csv",
+        BASE_DIR / "creditcard.csv.zip",
+        BASE_DIR / "creditcard.zip",
         BASE_DIR / "creditcard .csv",
         Path.cwd() / "creditcard.csv",
+        Path.cwd() / "creditcard.csv.zip",
+        Path.cwd() / "creditcard.zip",
         Path.cwd() / "creditcard .csv",
     ]
     for path in candidates:
@@ -68,8 +72,8 @@ def find_dataset_path() -> Path | None:
     return None
 
 @st.cache_data(show_spinner=False)
-def load_dataset(path_str: str) -> pd.DataFrame:
-    return pd.read_csv(path_str)
+def load_dataset(file_or_path) -> pd.DataFrame:
+    return pd.read_csv(file_or_path)
 
 def take_stratified_sample(
     df: pd.DataFrame, sample_size: int | None, random_state: int = RANDOM_STATE
@@ -178,14 +182,13 @@ def evaluate_model(
 
 @st.cache_resource(show_spinner=False)
 def run_experiment(
-    path_str: str,
+    _df: pd.DataFrame,
     sample_size: int | None,
     smote_strategy: float,
     cv_folds: int,
     tune_random_forest: bool,
 ) -> dict:
-    df = load_dataset(path_str)
-    working_df = take_stratified_sample(df, sample_size)
+    working_df = take_stratified_sample(_df, sample_size)
 
     x = working_df.drop(columns="Class")
     y = working_df["Class"]
@@ -613,13 +616,19 @@ def main() -> None:
     page = st.sidebar.radio("Go to", ["⚙️ Model Training", "🧪 Manual Testing Lab", "🔄 Admin Dashboard"])
 
     dataset_path = find_dataset_path()
-    if dataset_path is None:
-        st.error("Dataset not found. Add `creditcard.csv` to the project folder and rerun.")
-        st.stop()
 
     st.sidebar.divider()
     st.sidebar.header("Data & Training Setup")
-    dataset = load_dataset(str(dataset_path))
+    
+    if dataset_path is None:
+        st.sidebar.warning("Dataset not found on server.")
+        uploaded_file = st.sidebar.file_uploader("Upload creditcard.csv", type=["csv", "zip"])
+        if uploaded_file is None:
+            st.info("Please upload the dataset in the sidebar to continue.")
+            st.stop()
+        dataset = load_dataset(uploaded_file)
+    else:
+        dataset = load_dataset(str(dataset_path))
     
     training_profile = st.sidebar.selectbox("Training profile", list(TRAINING_PROFILES.keys()), index=1)
     profile_config = TRAINING_PROFILES[training_profile]
@@ -628,7 +637,7 @@ def main() -> None:
     if st.sidebar.button("Train Models", type="primary", use_container_width=True):
         with st.spinner("Training models, applying SMOTE, and computing metrics..."):
             results = run_experiment(
-                str(dataset_path),
+                dataset,
                 profile_config["sample_size"],
                 smote_strategy,
                 profile_config["cv_folds"],
