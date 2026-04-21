@@ -31,11 +31,6 @@ from sklearn.svm import LinearSVC
 
 RANDOM_STATE = 42
 BASE_DIR = Path(__file__).resolve().parent
-DATASET_BACKUP_URL = (
-    "https://raw.githubusercontent.com/Ankitkrsingh0509/"
-    "CREDIT-CARD-FRAUD-DETECTION-main/"
-    "a2c73d8b51f9dcadb000037fda9073799f7dbf7f/creditcard.csv.zip"
-)
 
 sns.set_theme(style="whitegrid")
 
@@ -78,12 +73,11 @@ def find_dataset_path() -> Path | None:
 
 @st.cache_data(show_spinner=False)
 def load_dataset(file_or_path) -> pd.DataFrame:
+    # Handle UploadedFile and path objects that end in .zip
+    name = getattr(file_or_path, "name", str(file_or_path))
+    if name.endswith(".zip"):
+        return pd.read_csv(file_or_path, compression="zip")
     return pd.read_csv(file_or_path)
-
-
-@st.cache_data(show_spinner=False)
-def load_backup_dataset() -> pd.DataFrame:
-    return pd.read_csv(DATASET_BACKUP_URL, compression="zip")
 
 def take_stratified_sample(
     df: pd.DataFrame, sample_size: int | None, random_state: int = RANDOM_STATE
@@ -631,24 +625,18 @@ def main() -> None:
     st.sidebar.header("Data & Training Setup")
     
     if dataset_path is None:
-        try:
-            with st.spinner("Loading hosted backup dataset..."):
-                dataset = load_backup_dataset()
-            st.sidebar.success("Loaded dataset from hosted backup zip.")
-        except Exception:
-            st.sidebar.warning(
-                "Dataset not found locally and the hosted backup could not be loaded. "
-                "Upload `creditcard.csv` or `creditcard.csv.zip` below."
+        st.sidebar.warning(
+            "Dataset not found in the app folder. Upload `creditcard.csv` or `creditcard.csv.zip` below."
+        )
+        uploaded_file = st.sidebar.file_uploader(
+            "Upload creditcard.csv or creditcard.csv.zip", type=["csv", "zip"]
+        )
+        if uploaded_file is None:
+            st.info(
+                "Please upload `creditcard.csv` or `creditcard.csv.zip` in the sidebar to continue."
             )
-            uploaded_file = st.sidebar.file_uploader(
-                "Upload creditcard.csv or creditcard.csv.zip", type=["csv", "zip"]
-            )
-            if uploaded_file is None:
-                st.info(
-                    "Please upload `creditcard.csv` or `creditcard.csv.zip` in the sidebar to continue."
-                )
-                st.stop()
-            dataset = load_dataset(uploaded_file)
+            st.stop()
+        dataset = load_dataset(uploaded_file)
     else:
         dataset = load_dataset(str(dataset_path))
     
