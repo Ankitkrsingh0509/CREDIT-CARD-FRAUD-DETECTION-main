@@ -412,7 +412,7 @@ def page_manual_testing():
     col_input1, col_input2 = st.columns([1, 2])
     with col_input1:
         st.subheader("Input Data")
-        input_method = st.radio("Choose Input Method", ["Select from Test Set", "Custom Input / Random"])
+        input_method = st.radio("Choose Input Method", ["Select from Test Set", "Synthetic Transaction"])
         
         if input_method == "Select from Test Set":
             sample_index = st.slider("Select a test transaction ID", 0, len(test_samples) - 1, 0)
@@ -421,19 +421,60 @@ def page_manual_testing():
             feature_row = selected_row.drop(labels=["Actual Class"]).to_frame().T
             st.info(f"Actual Class: **{'Fraud' if actual_class == 1 else 'Legitimate'}**")
         else:
-            profile_type = st.selectbox("Load template profile", ["Legitimate Template", "Fraud Template"])
-            if st.button("Generate Template Values"):
-                # Grab a random row matching the profile
-                target_cls = 0 if profile_type == "Legitimate Template" else 1
-                template_row = test_samples[test_samples["Actual Class"] == target_cls].sample(1).iloc[0]
-                st.session_state["custom_v_features"] = template_row.drop(["Time", "Amount", "Actual Class"]).to_dict()
-            
-            amt = st.number_input("Transaction Amount ($)", min_value=0.0, value=150.0)
-            time_val = st.number_input("Time (seconds since start)", min_value=0.0, value=10000.0)
-            
-            # Use generated V features or default to 0
-            v_features = st.session_state.get("custom_v_features", {f"V{i}": 0.0 for i in range(1, 29)})
-            
+            profile_type = st.selectbox(
+                "Start synthetic data from",
+                ["Neutral / Zero Features", "Legitimate-like Template", "Fraud-like Template"],
+            )
+
+            if "synthetic_v_features" not in st.session_state:
+                st.session_state["synthetic_v_features"] = {f"V{i}": 0.0 for i in range(1, 29)}
+
+            if st.button("Generate Synthetic Template"):
+                if profile_type == "Neutral / Zero Features":
+                    template_values = {f"V{i}": 0.0 for i in range(1, 29)}
+                    st.session_state["synthetic_amount"] = 150.0
+                    st.session_state["synthetic_time"] = 10000.0
+                    st.session_state["synthetic_amount_input"] = 150.0
+                    st.session_state["synthetic_time_input"] = 10000.0
+                else:
+                    target_cls = 0 if profile_type == "Legitimate-like Template" else 1
+                    template_row = test_samples[test_samples["Actual Class"] == target_cls].sample(1).iloc[0]
+                    template_values = template_row.drop(["Time", "Amount", "Actual Class"]).to_dict()
+                    st.session_state["synthetic_amount"] = float(template_row["Amount"])
+                    st.session_state["synthetic_time"] = float(template_row["Time"])
+                    st.session_state["synthetic_amount_input"] = float(template_row["Amount"])
+                    st.session_state["synthetic_time_input"] = float(template_row["Time"])
+
+                st.session_state["synthetic_v_features"] = template_values
+                for feature, value in template_values.items():
+                    st.session_state[f"synthetic_{feature}"] = float(value)
+
+            amt = st.number_input(
+                "Transaction Amount ($)",
+                min_value=0.0,
+                value=float(st.session_state.get("synthetic_amount", 150.0)),
+                key="synthetic_amount_input",
+            )
+            time_val = st.number_input(
+                "Time (seconds since start)",
+                min_value=0.0,
+                value=float(st.session_state.get("synthetic_time", 10000.0)),
+                key="synthetic_time_input",
+            )
+
+            v_features = st.session_state["synthetic_v_features"].copy()
+            with st.expander("Advanced: edit V1-V28 synthetic features"):
+                feature_columns = st.columns(4)
+                for index in range(1, 29):
+                    feature = f"V{index}"
+                    with feature_columns[(index - 1) % 4]:
+                        v_features[feature] = st.number_input(
+                            feature,
+                            value=float(v_features.get(feature, 0.0)),
+                            format="%.6f",
+                            key=f"synthetic_{feature}",
+                        )
+
             feature_dict = {"Time": time_val}
             feature_dict.update(v_features)
             feature_dict["Amount"] = amt
@@ -441,7 +482,7 @@ def page_manual_testing():
             feature_row = pd.DataFrame([feature_dict])
             # Reorder columns to match training
             feature_row = feature_row[test_samples.drop(columns=["Actual Class"]).columns]
-            st.info("Using template V1-V28 features + your custom Amount/Time.")
+            st.info("Synthetic user-defined transaction ready for prediction.")
 
     with col_input2:
         st.subheader("Model Prediction")
