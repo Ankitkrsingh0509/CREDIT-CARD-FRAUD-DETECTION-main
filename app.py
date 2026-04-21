@@ -1,4 +1,6 @@
+import gc
 import time
+import traceback
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -106,7 +108,7 @@ def build_pipelines(smote_strategy: float) -> dict[str, ImbPipeline]:
         "Random Forest": ImbPipeline(
             [
                 ("smote", SMOTE(random_state=RANDOM_STATE, sampling_strategy=smote_strategy)),
-                ("model", RandomForestClassifier(n_estimators=100, random_state=RANDOM_STATE, n_jobs=-1, class_weight="balanced_subsample")),
+                ("model", RandomForestClassifier(n_estimators=100, random_state=RANDOM_STATE, n_jobs=1, class_weight="balanced_subsample")),
             ]
         ),
         "Gradient Boosting": ImbPipeline(
@@ -218,7 +220,7 @@ def run_experiment(
 
     cv_rows = []
     for model_name, pipeline in pipelines.items():
-        scores = cross_validate(pipeline, x_train, y_train, cv=cv, scoring=scoring, n_jobs=-1)
+        scores = cross_validate(pipeline, x_train, y_train, cv=cv, scoring=scoring, n_jobs=1)
         cv_rows.append(
             {
                 "Model": model_name,
@@ -242,7 +244,7 @@ def run_experiment(
             param_grid=param_grid,
             scoring="recall",
             cv=cv,
-            n_jobs=-1,
+            n_jobs=1,
         )
         search.fit(x_train, y_train)
         pipelines["Random Forest"] = search.best_estimator_
@@ -278,8 +280,7 @@ def run_experiment(
     test_samples["Actual Class"] = y_test.values
     test_samples = test_samples.reset_index(drop=True)
 
-    return {
-        "working_df": working_df,
+    result = {
         "comparison_df": comparison_df.reset_index(drop=True),
         "cv_df": cv_df.reset_index(drop=True),
         "model_outputs": model_outputs,
@@ -295,6 +296,10 @@ def run_experiment(
             "cv_folds": cv_folds,
         },
     }
+    # Free the large intermediate DataFrame to reduce memory pressure
+    del working_df, x_train, x_test, y_train
+    gc.collect()
+    return result
 
 def plot_class_distribution(df: pd.DataFrame) -> plt.Figure:
     fig, axes = plt.subplots(1, 2, figsize=(13, 4))
@@ -640,21 +645,29 @@ def main() -> None:
     else:
         dataset = load_dataset(str(dataset_path))
     
-    training_profile = st.sidebar.selectbox("Training profile", list(TRAINING_PROFILES.keys()), index=1)
+    training_profile = st.sidebar.selectbox("Training profile", list(TRAINING_PROFILES.keys()), index=0)
     profile_config = TRAINING_PROFILES[training_profile]
     smote_strategy = st.sidebar.slider("SMOTE sampling strategy", 0.10, 1.00, 0.25, 0.05)
     
     if st.sidebar.button("Train Models", type="primary", use_container_width=True):
-        with st.spinner("Training models, applying SMOTE, and computing metrics..."):
-            results = run_experiment(
-                dataset,
-                profile_config["sample_size"],
-                smote_strategy,
-                profile_config["cv_folds"],
-                profile_config["tune_random_forest"],
+        try:
+            with st.spinner("Training models, applying SMOTE, and computing metrics..."):
+                results = run_experiment(
+                    dataset,
+                    profile_config["sample_size"],
+                    smote_strategy,
+                    profile_config["cv_folds"],
+                    profile_config["tune_random_forest"],
+                )
+                st.session_state["results"] = results
+                gc.collect()
+                st.success("Training Complete!")
+        except Exception:
+            st.error(
+                "Training failed (the server may have run out of memory). "
+                "Try the **Quick demo** profile or a smaller SMOTE strategy."
             )
-            st.session_state["results"] = results
-            st.success("Training Complete!")
+            st.code(traceback.format_exc())
 
     if page == "⚙️ Model Training":
         st.title("Credit Card Fraud Models")
