@@ -159,4 +159,6 @@ This project is designed to be both academically strong and practically meaningf
 - evaluation beyond accuracy
 - model tuning and interpretation
 
-That combination makes it suitable for coursework, project viva, and presentation.
+# 🌐 Live Project URL
+
+[(https://credit-card-fraud-detection-main-bbu4ngcjswnszytdcyq6ys.streamlit.app/)
